@@ -1,13 +1,12 @@
 package com.hogger.siliconbay;
 
-import com.hogger.siliconbay.config.AppConfig;
-import com.hogger.siliconbay.listener.ContextPathListener;
 import org.apache.catalina.Context;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.startup.Tomcat;
 import org.glassfish.jersey.servlet.ServletContainer;
 
-import java.io.File;
+import com.hogger.siliconbay.config.AppConfig;
+import com.hogger.siliconbay.listener.ContextPathListener;
 
 public class Main {
 

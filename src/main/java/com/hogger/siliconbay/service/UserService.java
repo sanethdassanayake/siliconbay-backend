@@ -1,5 +1,9 @@
 package com.hogger.siliconbay.service;
 
+import org.hibernate.HibernateException;
+import org.hibernate.Session;
+import org.hibernate.Transaction;
+
 import com.google.gson.JsonObject;
 import com.hogger.siliconbay.dto.UserDTO;
 import com.hogger.siliconbay.entity.Status;
@@ -10,12 +14,10 @@ import com.hogger.siliconbay.util.AppUtil;
 import com.hogger.siliconbay.util.HibernateUtil;
 import com.hogger.siliconbay.util.JwtUtil;
 import com.hogger.siliconbay.validation.Validator;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import jakarta.ws.rs.core.Context;
-import org.hibernate.HibernateException;
-import org.hibernate.Session;
-import org.hibernate.Transaction;
 
 public class UserService {
     public String addNewUser(UserDTO userDTO) {
@@ -60,6 +62,7 @@ public class UserService {
                 u.setLastName(userDTO.getLastName());
                 u.setEmail(userDTO.getEmail());
                 u.setPassword(userDTO.getPassword());
+                u.setRole("USER"); // Set default role
 
                 String verificationCode = AppUtil.generateCode();
 
@@ -74,11 +77,12 @@ public class UserService {
 
                 try {
                     hibernateSession.persist(u);
-                    transaction.commit();
 
                     // Send verification email
                     VerificationMail verificationMail = new VerificationMail(u.getEmail(), verificationCode);
                     MailServiceProvider.getInstance().sendMail(verificationMail);
+
+                    transaction.commit();
 
                     status = true;
                     message = "Account created successfully. Verification code has been sent to the your email. " +
@@ -88,8 +92,10 @@ public class UserService {
                 } catch (HibernateException e) {
                     transaction.rollback();
                     message = "Account creation failed. Please try again!";
+                } catch (RuntimeException e) {
+                    transaction.rollback();
+                    message = "Account creation failed. Verification email could not be sent!";
                 }
-
 
             }
             hibernateSession.close();
@@ -133,7 +139,7 @@ public class UserService {
                         .setParameter("value", String.valueOf(Status.Type.VERIFIED))
                         .getSingleResult();
 
-                if (user.getStatus().equals(verifiedStatus)) {
+                if (user.getStatus() != null && verifiedStatus.getValue().equals(user.getStatus().getValue())) {
                     message = "Account already verified!";
                 } else {
                     Transaction transaction = hibernateSession.beginTransaction();
@@ -188,39 +194,43 @@ public class UserService {
 
             if (singleUser == null) {
                 message = "Account not found. Please register first!";
+            } else if (!singleUser.getPassword().equals(userDTO.getPassword())) {
+                message = "Incorrect password. Please try again!";
+
+                hibernateSession.close();
+                responseObject.addProperty("status", status);
+                responseObject.addProperty("message", message);
+                return AppUtil.GSON.toJson(responseObject);
+
             } else {
-                if (!singleUser.getPassword().equals(userDTO.getPassword())) {
-                    message = "Incorrect password. Please try again!";
+                Status verifiedStatus = hibernateSession.createNamedQuery("Status.findByValue", Status.class)
+                        .setParameter("value", String.valueOf(Status.Type.VERIFIED))
+                        .getSingleResult();
 
-                    hibernateSession.close();
-                    responseObject.addProperty("status", status);
-                    responseObject.addProperty("message", message);
-                    return AppUtil.GSON.toJson(responseObject);
-
+                if (singleUser.getStatus() == null || !verifiedStatus.getValue().equals(singleUser.getStatus().getValue())) {
+                    message = "Your account is not verified. Please verify first!";
                 } else {
-                    Status verifiedStatus = hibernateSession.createNamedQuery("Status.findByValue", Status.class)
-                            .setParameter("value", String.valueOf(Status.Type.VERIFIED))
-                            .getSingleResult();
+                    String role = singleUser.getRole() == null ? "USER" : singleUser.getRole();
+                    String token = JwtUtil.generateToken(singleUser.getEmail(), singleUser.getId(), role);
 
-                    if (!singleUser.getStatus().equals(verifiedStatus)) {
-                        message = "Your account is not verified. Please verify first!";
+                    HttpSession session = request.getSession(true);
+                    session.setAttribute("user", singleUser.getEmail());
+                    session.setAttribute("userId", singleUser.getId());
+                    session.setAttribute("role", role);
 
-                    } else {
-                        String token = JwtUtil.generateToken(singleUser.getEmail(), singleUser.getId());
+                    status = true;
+                    message = "Login successful";
 
-                        status = true;
-                        message = "Login successful";
+                    responseObject.addProperty("token", token);
 
-                        responseObject.addProperty("token", token);
+                    JsonObject userObject = new JsonObject();
+                    userObject.addProperty("id", singleUser.getId());
+                    userObject.addProperty("email", singleUser.getEmail());
+                    userObject.addProperty("firstName", singleUser.getFirstName());
+                    userObject.addProperty("lastName", singleUser.getLastName());
+                    userObject.addProperty("role", role);
 
-                        JsonObject userObject = new JsonObject();
-                        userObject.addProperty("id", singleUser.getId());
-                        userObject.addProperty("email", singleUser.getEmail());
-                        userObject.addProperty("firstName", singleUser.getFirstName());
-                        userObject.addProperty("lastName", singleUser.getLastName());
-
-                        responseObject.add("user", userObject);
-                    }
+                    responseObject.add("user", userObject);
                 }
             }
 

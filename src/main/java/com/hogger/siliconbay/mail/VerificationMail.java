@@ -6,6 +6,9 @@ import jakarta.mail.Message;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.InternetAddress;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
 public class VerificationMail extends Mailable {
     private final String to;
     private final String verificationCode;
@@ -21,7 +24,7 @@ public class VerificationMail extends Mailable {
         message.setSubject("Email Verification Code - " + Env.get("app.name"));
 
         String appURL = Env.get("app.url");
-        String verifyURL = appURL + "/verify?email=" + to + "&verificationCode=" + verificationCode;
+        String verifyURL = appURL + "/api/verify?email=" + URLEncoder.encode(to, StandardCharsets.UTF_8) + "&verificationCode=" + verificationCode;
 
         HtmlTextEmail htmlTextEmail = getEmailTemplateBuilder()
                 .header()

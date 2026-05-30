@@ -25,6 +25,9 @@ public class User extends BaseEntity {
     @Column(name = "verification_code", nullable = false, length = 15)
     private String verificationCode;
 
+    @Column(length = 20)
+    private String role;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "status_id", nullable = false)
     private Status status;
@@ -75,6 +78,14 @@ public class User extends BaseEntity {
 
     public void setVerificationCode(String verificationCode) {
         this.verificationCode = verificationCode;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
     }
 
     public Status getStatus() {

@@ -166,11 +166,31 @@ public class ProductDTO implements Serializable {
         this.images = images;
     }
 
+    // Rating and Reviews
+    private RatingDTO rating;
+    private List<ReviewDTO> reviews;
+
     public List<StockDTO> getStockList() {
         return stockList;
     }
 
     public void setStockList(List<StockDTO> stockList) {
         this.stockList = stockList;
+    }
+
+    public RatingDTO getRating() {
+        return rating;
+    }
+
+    public void setRating(RatingDTO rating) {
+        this.rating = rating;
+    }
+
+    public List<ReviewDTO> getReviews() {
+        return reviews;
+    }
+
+    public void setReviews(List<ReviewDTO> reviews) {
+        this.reviews = reviews;
     }
 }

@@ -1,17 +1,28 @@
 package com.hogger.siliconbay.service;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-import com.hogger.siliconbay.dto.CheckoutDTO;
-import com.hogger.siliconbay.entity.*;
-import com.hogger.siliconbay.util.AppUtil;
-import com.hogger.siliconbay.util.CurrentUserUtil;
-import com.hogger.siliconbay.util.HibernateUtil;
-import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
+
 import org.hibernate.Session;
 import org.hibernate.Transaction;
 
-import java.util.List;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.hogger.siliconbay.dto.CheckoutDTO;
+import com.hogger.siliconbay.entity.Cart;
+import com.hogger.siliconbay.entity.CartItem;
+import com.hogger.siliconbay.entity.DeliveryType;
+import com.hogger.siliconbay.entity.Order;
+import com.hogger.siliconbay.entity.OrderItem;
+import com.hogger.siliconbay.entity.Status;
+import com.hogger.siliconbay.entity.Stock;
+import com.hogger.siliconbay.entity.User;
+import com.hogger.siliconbay.entity.UserPaymentInstrument;
+import com.hogger.siliconbay.util.AppUtil;
+import com.hogger.siliconbay.util.CurrentUserUtil;
+import com.hogger.siliconbay.util.Env;
+import com.hogger.siliconbay.util.HibernateUtil;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 public class OrderService {
     public String checkout(String jsonData, HttpServletRequest request) {
@@ -20,21 +31,30 @@ public class OrderService {
         if (userId == null) {
             return error("User session not found");
         }
-        if (dto == null || dto.getDeliveryTypeId() <= 0 || dto.getPaymentInstrumentId() == null) {
-            return error("Delivery type and payment instrument are required");
+        if (dto == null) {
+            return error("Checkout data is required");
         }
 
         try (Session session = HibernateUtil.getSessionFactory().openSession()) {
             Transaction tx = session.beginTransaction();
             User user = session.get(User.class, userId);
-            DeliveryType deliveryType = session.get(DeliveryType.class, dto.getDeliveryTypeId());
-            UserPaymentInstrument instrument = session.get(UserPaymentInstrument.class, dto.getPaymentInstrumentId());
+            DeliveryType deliveryType = dto.getDeliveryTypeId() > 0
+                    ? session.get(DeliveryType.class, dto.getDeliveryTypeId())
+                    : session.createQuery("FROM DeliveryType d ORDER BY d.id ASC", DeliveryType.class)
+                    .setMaxResults(1)
+                    .getSingleResultOrNull();
+            UserPaymentInstrument instrument = dto.getPaymentInstrumentId() == null
+                    ? null
+                    : session.get(UserPaymentInstrument.class, dto.getPaymentInstrumentId());
             Cart cart = session.createQuery("FROM Cart c WHERE c.user.id=:userId", Cart.class)
                     .setParameter("userId", userId)
                     .getSingleResultOrNull();
-            if (user == null || deliveryType == null || instrument == null || instrument.getUser().getId() != userId || cart == null) {
+            if (user == null || deliveryType == null || cart == null) {
                 tx.rollback();
                 return error("Checkout data not found");
+            }
+            if (instrument != null && instrument.getUser().getId() != userId) {
+                instrument = null;
             }
 
             List<CartItem> items = session.createQuery("FROM CartItem ci WHERE ci.cart.id=:cartId", CartItem.class)
@@ -76,10 +96,10 @@ public class OrderService {
 
             com.hogger.siliconbay.entity.Transaction paymentTransaction = new com.hogger.siliconbay.entity.Transaction();
             paymentTransaction.setOrder(order);
-            paymentTransaction.setAmount(total);
+            paymentTransaction.setAmount(roundMoney(total));
             paymentTransaction.setUserPaymentInstrument(instrument);
-            paymentTransaction.setStatus(session.createNamedQuery("Status.findByValue", Status.class)
-                    .setParameter("value", String.valueOf(Status.Type.COMPLETED))
+                paymentTransaction.setStatus(session.createNamedQuery("Status.findByValue", Status.class)
+                    .setParameter("value", String.valueOf(Status.Type.PENDING))
                     .getSingleResult());
             session.persist(paymentTransaction);
 
@@ -94,7 +114,9 @@ public class OrderService {
             responseObject.addProperty("message", "Order placed successfully");
             responseObject.add("order", buildOrderJson(session, order));
             responseObject.addProperty("transactionId", paymentTransaction.getId());
-            responseObject.addProperty("total", total);
+            responseObject.addProperty("total", roundMoney(total));
+            String currency = Env.get("app.currency") == null ? "LKR" : Env.get("app.currency");
+            responseObject.addProperty("currency", currency);
             return AppUtil.GSON.toJson(responseObject);
         }
     }
@@ -238,11 +260,15 @@ public class OrderService {
     private JsonObject buildOrderJson(Session session, Order order) {
         JsonObject orderObject = new JsonObject();
         orderObject.addProperty("id", order.getId());
+        orderObject.addProperty("orderId", order.getId());
+        orderObject.addProperty("createdAt", order.getCreatedAt() == null ? null : order.getCreatedAt().toString());
+        orderObject.addProperty("updatedAt", order.getUpdatedAt() == null ? null : order.getUpdatedAt().toString());
+        orderObject.addProperty("date", order.getCreatedAt() == null ? null : order.getCreatedAt().toString());
         orderObject.addProperty("status", order.getStatus() == null ? null : order.getStatus().getValue());
         orderObject.addProperty("deliveryType", order.getDeliveryType() == null ? null : order.getDeliveryType().getName());
-        orderObject.addProperty("deliveryPrice", order.getDeliveryType() == null ? 0 : order.getDeliveryType().getPrice());
+        orderObject.addProperty("deliveryPrice", order.getDeliveryType() == null ? 0 : roundMoney(order.getDeliveryType().getPrice()));
         JsonArray itemArray = new JsonArray();
-        double total = order.getDeliveryType() == null ? 0 : order.getDeliveryType().getPrice();
+        double total = order.getDeliveryType() == null ? 0 : roundMoney(order.getDeliveryType().getPrice());
 
         List<OrderItem> items = session.createQuery("FROM OrderItem oi WHERE oi.order.id=:orderId", OrderItem.class)
                 .setParameter("orderId", order.getId())
@@ -254,19 +280,39 @@ public class OrderService {
             itemObject.addProperty("stockId", item.getStock().getId());
             itemObject.addProperty("productId", item.getStock().getProduct().getId());
             itemObject.addProperty("productName", item.getStock().getProduct().getName());
-            itemObject.addProperty("price", item.getStock().getPrice());
-            itemObject.addProperty("subtotal", item.getStock().getPrice() * item.getQty());
-            total += item.getStock().getPrice() * item.getQty();
+            double itemPrice = roundMoney(item.getStock().getPrice());
+            double subtotal = roundMoney(itemPrice * item.getQty());
+            itemObject.addProperty("price", itemPrice);
+            itemObject.addProperty("subtotal", subtotal);
+            total += subtotal;
             itemArray.add(itemObject);
         }
+
+        orderObject.addProperty("itemsCount", items.size());
 
         com.hogger.siliconbay.entity.Transaction transaction = session.createQuery("FROM Transaction t WHERE t.order.id=:orderId", com.hogger.siliconbay.entity.Transaction.class)
                 .setParameter("orderId", order.getId())
                 .getSingleResultOrNull();
-        orderObject.addProperty("transactionId", transaction == null ? 0 : transaction.getId());
-        orderObject.addProperty("transactionAmount", transaction == null ? total : transaction.getAmount());
+        long transactionId = 0L;
+        if (transaction != null && transaction.getId() != null) {
+            transactionId = transaction.getId();
+        }
+        orderObject.addProperty("transactionId", transactionId);
+        double roundedTransactionAmount = transaction == null || transaction.getAmount() == null ? total : roundMoney(transaction.getAmount());
+        orderObject.addProperty("transactionAmount", roundedTransactionAmount);
+        orderObject.addProperty("total", roundedTransactionAmount);
+        orderObject.addProperty("amount", roundedTransactionAmount);
+        String currency = Env.get("app.currency") == null ? "LKR" : Env.get("app.currency");
+        orderObject.addProperty("currency", currency);
+        orderObject.addProperty("paymentMethod", transaction == null || transaction.getPaymentMethod() == null ? "PayHere" : transaction.getPaymentMethod());
+        orderObject.addProperty("paymentId", transaction == null || transaction.getPaymentId() == null ? "" : transaction.getPaymentId());
+        orderObject.addProperty("trackingNumber", transaction == null || transaction.getPaymentId() == null ? "" : transaction.getPaymentId());
         orderObject.add("items", itemArray);
         return orderObject;
+    }
+
+    private double roundMoney(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     private String error(String message) {

@@ -1,28 +1,36 @@
 package com.hogger.siliconbay.controller.api;
 
-import com.google.gson.JsonObject;
-import com.hogger.siliconbay.dto.PayHereIPNDTO;
-import com.hogger.siliconbay.dto.PayHereRequestDTO;
-import com.hogger.siliconbay.provider.PayHerePaymentProvider;
-import com.hogger.siliconbay.service.PaymentService;
-import com.hogger.siliconbay.util.PayHereUtil;
-import com.hogger.siliconbay.util.HibernateUtil;
-import com.hogger.siliconbay.entity.Order;
-import com.hogger.siliconbay.entity.Status;
-import com.hogger.siliconbay.entity.Transaction;
-import com.hogger.siliconbay.entity.UserPaymentInstrument;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.ws.rs.*;
-import jakarta.ws.rs.core.Context;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import org.hibernate.Session;
-
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.text.DecimalFormat;
 import java.util.Map;
 import java.util.logging.Logger;
+
+import org.hibernate.Session;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.hogger.siliconbay.dto.PayHereIPNDTO;
+import com.hogger.siliconbay.dto.PayHereRequestDTO;
+import com.hogger.siliconbay.entity.Order;
+import com.hogger.siliconbay.entity.Status;
+import com.hogger.siliconbay.provider.PayHerePaymentProvider;
+import com.hogger.siliconbay.service.PaymentService;
+import com.hogger.siliconbay.util.HibernateUtil;
+import com.hogger.siliconbay.util.PayHereUtil;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 
 @Path("/payments")
 @Produces(MediaType.APPLICATION_JSON)
@@ -65,15 +73,37 @@ public class PaymentController {
 
     @POST
     @Path("/payhere/create")
-    @Consumes(MediaType.APPLICATION_JSON)
+    @Consumes("*/*")
     @Produces(MediaType.TEXT_HTML)
-    public Response createPayHerePayment(PayHereRequestDTO req) {
+    public Response createPayHerePayment(@Context HttpServletRequest request) {
         if (PayHereUtil.getMerchantId().isEmpty()) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity("PAYHERE_MERCHANT_ID not configured").build();
         }
-        String html = provider.buildAutoSubmitForm(req);
-        return Response.ok(html, MediaType.TEXT_HTML).build();
+        try {
+            String jsonData;
+            try {
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader reader = request.getReader()) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+                }
+                jsonData = sb.toString();
+            } catch (IllegalStateException ise) {
+                // getReader() was already called; fall back to input stream
+                java.io.InputStream is = request.getInputStream();
+                java.util.Scanner s = new java.util.Scanner(is, "UTF-8").useDelimiter("\\A");
+                jsonData = s.hasNext() ? s.next() : "";
+            }
+            PayHereRequestDTO req = new Gson().fromJson(jsonData, PayHereRequestDTO.class);
+            String html = provider.buildAutoSubmitForm(req);
+            return Response.ok(html, MediaType.TEXT_HTML).build();
+        } catch (Exception e) {
+            logger.severe("Error reading request body for createPayHerePayment: " + e.getMessage());
+            return Response.status(Response.Status.BAD_REQUEST).entity("BAD_REQUEST").build();
+        }
     }
 
     @POST
@@ -95,6 +125,20 @@ public class PaymentController {
         ipn.setCustom_1(getParam(params, "custom_1"));
         ipn.setCustom_2(getParam(params, "custom_2"));
 
+        return processIpn(ipn, request);
+    }
+
+    @POST
+    @Path("/payhere/ipn")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.TEXT_PLAIN)
+    public Response handleIpnJson(PayHereIPNDTO ipn, @Context HttpServletRequest request) {
+        // JAX-RS will bind JSON to PayHereIPNDTO; delegate to common processor
+        return processIpn(ipn, request);
+    }
+
+    private Response processIpn(PayHereIPNDTO ipn, HttpServletRequest request) {
+
         logger.info("Received PayHere IPN: merchant=" + ipn.getMerchant_id() + " order=" + ipn.getOrder_id()
                 + " status=" + ipn.getStatus_code() + " amount=" + ipn.getPayhere_amount());
 
@@ -106,6 +150,7 @@ public class PaymentController {
 
         // verify md5sig
         String localMd5 = computeLocalMd5(ipn);
+        logger.info("IPN md5 local=" + localMd5 + " remote=" + ipn.getMd5sig());
         if (localMd5 == null || !localMd5.equalsIgnoreCase(ipn.getMd5sig())) {
             logger.warning("IPN signature mismatch. local=" + localMd5 + " remote=" + ipn.getMd5sig());
             return Response.status(Response.Status.BAD_REQUEST).entity("FAIL").build();
@@ -199,7 +244,7 @@ public class PaymentController {
 
             JsonObject obj = new JsonObject();
             obj.addProperty("hash", hash);
-            return Response.ok(obj).build();
+            return Response.ok(obj.toString(), MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("HASH_ERROR").build();
         }
@@ -207,15 +252,31 @@ public class PaymentController {
 
     @POST
     @Path("/payhere/create-js")
-    @Consumes(MediaType.APPLICATION_JSON)
+    @Consumes("*/*")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response createPayHereJsPayload(PayHereRequestDTO req) {
+    public Response createPayHereJsPayload(@Context HttpServletRequest request) {
         if (PayHereUtil.getMerchantId().isEmpty() || PayHereUtil.getMerchantSecret().isEmpty()) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity("PAYHERE_MERCHANT_ID or PAYHERE_MERCHANT_SECRET not configured").build();
         }
 
         try {
+            String jsonData;
+            try {
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader reader = request.getReader()) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+                }
+                jsonData = sb.toString();
+            } catch (IllegalStateException ise) {
+                java.io.InputStream is = request.getInputStream();
+                java.util.Scanner s = new java.util.Scanner(is, "UTF-8").useDelimiter("\\A");
+                jsonData = s.hasNext() ? s.next() : "";
+            }
+            PayHereRequestDTO req = new Gson().fromJson(jsonData, PayHereRequestDTO.class);
             String merchantId = PayHereUtil.getMerchantId();
             String merchantSecret = PayHereUtil.getMerchantSecret();
             DecimalFormat df = new DecimalFormat("0.00");
@@ -244,7 +305,7 @@ public class PaymentController {
             payload.addProperty("city", req.getCity());
             payload.addProperty("country", req.getCountry());
 
-            return Response.ok(payload).build();
+            return Response.ok(payload.toString(), MediaType.APPLICATION_JSON).build();
         } catch (Exception e) {
             logger.severe("Error building PayHere JS payload: " + e.getMessage());
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("HASH_ERROR").build();
@@ -277,5 +338,14 @@ public class PaymentController {
         String[] arr = params.get(name);
         if (arr == null || arr.length == 0) return null;
         return arr[0];
+    }
+
+    private String getJson(com.google.gson.JsonObject obj, String name) {
+        if (obj == null || !obj.has(name) || obj.get(name).isJsonNull()) return null;
+        try {
+            return obj.get(name).getAsString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

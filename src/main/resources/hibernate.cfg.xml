@@ -36,5 +36,6 @@
         <mapping class="com.hogger.siliconbay.entity.UserPaymentInstrument"/>
         <mapping class="com.hogger.siliconbay.entity.Wishlist"/>
         <mapping class="com.hogger.siliconbay.entity.WishlistItem"/>
+        <mapping class="com.hogger.siliconbay.entity.Review"/>
     </session-factory>
 </hibernate-configuration>

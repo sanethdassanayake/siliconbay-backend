@@ -7,6 +7,7 @@ import org.glassfish.jersey.servlet.ServletContainer;
 
 import com.hogger.siliconbay.config.AppConfig;
 import com.hogger.siliconbay.listener.ContextPathListener;
+import com.hogger.siliconbay.util.DataSeeder;
 
 public class Main {
 
@@ -18,6 +19,8 @@ public class Main {
 
     public static void main(String[] args) {
         try {
+            DataSeeder.seed();
+
             // Initialize and configure the embedded Tomcat server
             Tomcat tomcat = new Tomcat();
             tomcat.setPort(SERVER_PORT);
@@ -25,6 +28,8 @@ public class Main {
 
             // Webapp directory is not needed for API-only apps
             Context context = tomcat.addContext(CONTEXT_PATH, null);
+            // Ensure the webapp classloader can see application classes compiled in target/classes
+            context.setParentClassLoader(Main.class.getClassLoader());
 
             Tomcat.addServlet(context, "JerseyServlet", new ServletContainer(new AppConfig()));
             context.addServletMappingDecoded("/api/*", "JerseyServlet");

@@ -1,8 +1,24 @@
 package com.hogger.siliconbay.util;
 
-import com.hogger.siliconbay.entity.*;
 import org.hibernate.Session;
 import org.hibernate.Transaction;
+
+import com.hogger.siliconbay.entity.Architecture;
+import com.hogger.siliconbay.entity.Brand;
+import com.hogger.siliconbay.entity.Category;
+import com.hogger.siliconbay.entity.DeliveryType;
+import com.hogger.siliconbay.entity.Manufacturer;
+import com.hogger.siliconbay.entity.Model;
+import com.hogger.siliconbay.entity.Order;
+import com.hogger.siliconbay.entity.OrderItem;
+import com.hogger.siliconbay.entity.PaymentMethod;
+import com.hogger.siliconbay.entity.PaymentType;
+import com.hogger.siliconbay.entity.Product;
+import com.hogger.siliconbay.entity.Seller;
+import com.hogger.siliconbay.entity.Status;
+import com.hogger.siliconbay.entity.Stock;
+import com.hogger.siliconbay.entity.User;
+import com.hogger.siliconbay.entity.UserPaymentInstrument;
 
 public class DatabaseSeeder {
     public void seed() {
@@ -15,6 +31,7 @@ public class DatabaseSeeder {
                 seedUsersAndSeller(session);
                 seedCatalog(session);
                 seedPaymentInstruments(session);
+                seedOrders(session);
                 tx.commit();
                 System.out.println("Database seed completed...");
             } catch (Exception e) {
@@ -74,8 +91,14 @@ public class DatabaseSeeder {
     }
 
     private void seedDeliveryTypes(Session session) {
-        createDeliveryTypeIfMissing(session, "Standard", 500);
-        createDeliveryTypeIfMissing(session, "Express", 1200);
+        String currency = Env.get("app.currency") == null ? "LKR" : Env.get("app.currency");
+        if ("USD".equalsIgnoreCase(currency)) {
+            createDeliveryTypeIfMissing(session, "Standard", 5);
+            createDeliveryTypeIfMissing(session, "Express", 12);
+        } else {
+            createDeliveryTypeIfMissing(session, "Standard", 500);
+            createDeliveryTypeIfMissing(session, "Express", 1200);
+        }
     }
 
     private void createDeliveryTypeIfMissing(Session session, String name, double price) {
@@ -94,8 +117,8 @@ public class DatabaseSeeder {
         Status verified = getStatus(session, Status.Type.VERIFIED);
         Status active = getStatus(session, Status.Type.ACTIVE);
 
-        User admin = createUserIfMissing(session, "Admin", "User", "admin@siliconbay.com", "Admin@123", verified, "ADMIN");
-        User buyer = createUserIfMissing(session, "Demo", "Buyer", "buyer@siliconbay.com", "Buyer@123", verified, "USER");
+        createUserIfMissing(session, "Admin", "User", "admin@siliconbay.com", "Admin@123", verified, "ADMIN");
+        createUserIfMissing(session, "Demo", "Buyer", "buyer@siliconbay.com", "Buyer@123", verified, "USER");
         User sellerUser = createUserIfMissing(session, "Demo", "Seller", "seller@siliconbay.com", "Seller@123", verified, "SELLER");
 
         Seller seller = session.createQuery("FROM Seller s WHERE s.user.id=:userId", Seller.class)
@@ -213,7 +236,12 @@ public class DatabaseSeeder {
         if (stock == null) {
             stock = new Stock();
             stock.setProduct(product);
-            stock.setPrice(125000);
+            String currency = Env.get("app.currency") == null ? "LKR" : Env.get("app.currency");
+            if ("USD".equalsIgnoreCase(currency)) {
+                stock.setPrice(1250);
+            } else {
+                stock.setPrice(125000);
+            }
             stock.setQty(20);
             stock.setStatus(getStatus(session, Status.Type.ACTIVE));
             session.persist(stock);
@@ -253,6 +281,117 @@ public class DatabaseSeeder {
         instrument.setExpYear(2030);
         instrument.setDefault(true);
         session.persist(instrument);
+    }
+
+    private void seedOrders(Session session) {
+        User buyer = session.createNamedQuery("User.getByEmail", User.class)
+                .setParameter("email", "buyer@siliconbay.com")
+                .getSingleResultOrNull();
+        if (buyer == null) {
+            return;
+        }
+
+        DeliveryType standardDelivery = session.createQuery("FROM DeliveryType dt WHERE dt.name=:name", DeliveryType.class)
+                .setParameter("name", "Standard")
+                .getSingleResultOrNull();
+        DeliveryType expressDelivery = session.createQuery("FROM DeliveryType dt WHERE dt.name=:name", DeliveryType.class)
+                .setParameter("name", "Express")
+                .getSingleResultOrNull();
+        if (standardDelivery == null || expressDelivery == null) {
+            return;
+        }
+
+        Product demoProduct = session.createQuery("FROM Product p WHERE p.name=:name", Product.class)
+                .setParameter("name", "ASUS RTX 4060 8GB")
+                .getSingleResultOrNull();
+        if (demoProduct == null) {
+            return;
+        }
+
+        Stock stock = session.createQuery("FROM Stock s WHERE s.product.id=:productId", Stock.class)
+                .setParameter("productId", demoProduct.getId())
+                .setMaxResults(1)
+                .getSingleResultOrNull();
+        if (stock == null) {
+            return;
+        }
+
+        UserPaymentInstrument instrument = session.createQuery("FROM UserPaymentInstrument p WHERE p.user.id=:userId", UserPaymentInstrument.class)
+                .setParameter("userId", buyer.getId())
+                .setMaxResults(1)
+                .getSingleResultOrNull();
+
+        Status packing = getStatus(session, Status.Type.PACKING);
+        Status delivered = getStatus(session, Status.Type.DELIVERED);
+        Status pending = getStatus(session, Status.Type.PENDING);
+        Status completed = getStatus(session, Status.Type.COMPLETED);
+
+        Order packingOrder = getOrCreateOrder(session, buyer, packing, standardDelivery);
+        getOrCreateOrderItem(session, packingOrder, stock, 1);
+        getOrCreateTransaction(session, packingOrder, instrument, pending, "PayHere", "SEED-ORDER-001", stock.getPrice() + standardDelivery.getPrice());
+
+        Order deliveredOrder = getOrCreateOrder(session, buyer, delivered, expressDelivery);
+        getOrCreateOrderItem(session, deliveredOrder, stock, 2);
+        getOrCreateTransaction(session, deliveredOrder, instrument, completed, "PayHere", "SEED-ORDER-002", (stock.getPrice() * 2) + expressDelivery.getPrice());
+    }
+
+    private Order getOrCreateOrder(Session session, User user, Status status, DeliveryType deliveryType) {
+        Order existingOrder = session.createQuery(
+                        "from Order o where o.user = :user and o.status = :status and o.deliveryType = :deliveryType",
+                        Order.class)
+                .setParameter("user", user)
+                .setParameter("status", status)
+                .setParameter("deliveryType", deliveryType)
+                .uniqueResult();
+
+        if (existingOrder != null) {
+            return existingOrder;
+        }
+
+        Order order = new Order();
+        order.setUser(user);
+        order.setStatus(status);
+        order.setDeliveryType(deliveryType);
+        session.persist(order);
+        return order;
+    }
+
+    private void getOrCreateOrderItem(Session session, Order order, Stock stock, int qty) {
+        OrderItem existingOrderItem = session.createQuery(
+                        "from OrderItem oi where oi.order = :order and oi.stock = :stock",
+                        OrderItem.class)
+                .setParameter("order", order)
+                .setParameter("stock", stock)
+                .uniqueResult();
+
+        if (existingOrderItem != null) {
+            return;
+        }
+
+        OrderItem orderItem = new OrderItem();
+        orderItem.setOrder(order);
+        orderItem.setStock(stock);
+        orderItem.setQty(qty);
+        session.persist(orderItem);
+    }
+
+    private void getOrCreateTransaction(Session session, Order order, UserPaymentInstrument instrument, Status status, String paymentMethod, String paymentId, double amount) {
+        com.hogger.siliconbay.entity.Transaction existingTransaction = session.createQuery("FROM Transaction t WHERE t.order.id=:orderId", com.hogger.siliconbay.entity.Transaction.class)
+                .setParameter("orderId", order.getId())
+                .getSingleResultOrNull();
+
+        if (existingTransaction != null) {
+            return;
+        }
+
+        com.hogger.siliconbay.entity.Transaction transaction = new com.hogger.siliconbay.entity.Transaction();
+        transaction.setOrder(order);
+        transaction.setAmount(amount);
+        transaction.setUserPaymentInstrument(instrument);
+        transaction.setStatus(status);
+        transaction.setPaymentMethod(paymentMethod);
+        transaction.setPaymentId(paymentId);
+        session.persist(transaction);
     }
 
     private Status getStatus(Session session, Status.Type type) {

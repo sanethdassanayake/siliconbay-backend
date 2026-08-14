@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.Context;
@@ -38,6 +39,23 @@ public class UserController {
         UserDTO userDTO = AppUtil.GSON.fromJson(jsonData, UserDTO.class);
         String responseJson = new UserService().userLogin(userDTO, request);
         return Response.ok().entity(responseJson).build();
+    }
+
+    @IsUser
+    @GET
+    @Path("/me")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response me(@Context HttpServletRequest request) {
+        return Response.ok(new UserService().getMyProfile(request)).build();
+    }
+
+    @IsUser
+    @PUT
+    @Path("/me")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response updateMe(String jsonData, @Context HttpServletRequest request) {
+        return Response.ok(new UserService().updateMyProfile(jsonData, request)).build();
     }
 
     @IsUser

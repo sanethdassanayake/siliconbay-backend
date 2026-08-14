@@ -1,12 +1,13 @@
 package com.hogger.siliconbay.util;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Date;
+
+import javax.crypto.SecretKey;
+
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-
-import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
-import java.util.Date;
 
 public class JwtUtil {
 
@@ -25,21 +26,21 @@ public class JwtUtil {
 
     public static String generateToken(String email, int userId, String role) {
         return Jwts.builder()
-                .subject(email)
+                .setSubject(email)
                 .claim("userId", userId)
                 .claim("role", role == null ? "USER" : role)
-                .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
                 .signWith(KEY)
                 .compact();
     }
 
     private static Claims parseClaims(String token) {
         return Jwts.parser()
-                .verifyWith(KEY)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+            .setSigningKey(KEY)
+            .build()
+            .parseClaimsJws(token)
+            .getBody();
     }
 
     public static String getEmailFromToken(String token) {
@@ -47,7 +48,15 @@ public class JwtUtil {
     }
 
     public static Long getUserIdFromToken(String token) {
-        return parseClaims(token).get("userId", Long.class);
+        Object v = parseClaims(token).get("userId");
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public static String getRoleFromToken(String token) {
@@ -56,8 +65,7 @@ public class JwtUtil {
     }
 
     public static boolean isTokenExpired(String token) {
-        return parseClaims(token)
-                .getExpiration()
-                .before(new Date());
+        Date exp = parseClaims(token).getExpiration();
+        return exp == null || exp.before(new Date());
     }
 }

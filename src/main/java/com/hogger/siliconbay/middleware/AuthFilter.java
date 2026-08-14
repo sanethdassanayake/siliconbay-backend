@@ -1,7 +1,10 @@
 package com.hogger.siliconbay.middleware;
 
+import java.io.IOException;
+
 import com.hogger.siliconbay.annotation.IsUser;
 import com.hogger.siliconbay.util.JwtUtil;
+
 import jakarta.annotation.Priority;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
@@ -13,8 +16,6 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 
-import java.io.IOException;
-
 @Provider
 @Priority(Priorities.AUTHENTICATION)
 @IsUser
@@ -24,6 +25,10 @@ public class AuthFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
+        // Allow preflight requests
+        if ("OPTIONS".equalsIgnoreCase(ctx.getMethod())) {
+            return;
+        }
         HttpSession session = request.getSession(false);
         if (session != null && session.getAttribute("user") != null) {
             return;

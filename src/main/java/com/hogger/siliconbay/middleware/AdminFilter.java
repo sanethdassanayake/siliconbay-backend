@@ -2,6 +2,7 @@ package com.hogger.siliconbay.middleware;
 
 import com.hogger.siliconbay.annotation.IsAdmin;
 import com.hogger.siliconbay.util.JwtUtil;
+
 import jakarta.annotation.Priority;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
@@ -22,6 +23,10 @@ public class AdminFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) {
+        // Allow preflight requests
+        if ("OPTIONS".equalsIgnoreCase(ctx.getMethod())) {
+            return;
+        }
         HttpSession session = request.getSession(false);
         if (session != null && "ADMIN".equals(session.getAttribute("role"))) {
             return;
